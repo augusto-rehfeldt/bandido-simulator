@@ -2,20 +2,22 @@
 
 ## What This Is
 A Python simulation of cooperative Bandido with local and API-backed player strategies.
+See README.md for usage, benchmark results and the card rules the simulator enforces.
 
 ## Current Entry Point
-- Run: `python bandido.py`
-- Benchmark: `python bandido.py --benchmark --games 25 --seed 1`
-- MiniMax smoke test: `python bandido.py --strategy minimax-api --turn-limit 1 --api-options 4 --verbose`
-- High-res image: `python bandido.py --png-scale 12 --output bandido_hires.png`
+- Run: `python bandido.py --seed 37 --output game.png`
+- Benchmark: `python bandido.py --benchmark --games 30 --seed 1`
+- Catalogue check: `python bandido.py --validate`
+- API smoke test: `python bandido.py --strategy minimax-api --turn-limit 1 --api-options 4 --verbose`
 
 ## Current State
-- `bandido.py` contains the rules simulation, strategies, CLI, benchmark mode, and PNG rendering.
-- Strategies are `random`, `greedy`, `compact`, `minimax-api`, and `nvidia-nim-api`.
-- API strategy uses `.env` variables: `MINIMAX_API_KEY`, `MINIMAX_BASE_URL`, `MINIMAX_MODEL`, and `MINIMAX_TIMEOUT`.
-- API choices are constrained to locally generated legal moves.
-- Slow or failed API requests fall back to the best local ranked legal move.
+- `bandido.py` contains the rules simulation, strategies, CLI, benchmark mode and PNG rendering
+  (cropped to the tunnels unless `--full-board`).
+- Strategies: `random`, `greedy`, `compact`, `minimax-api`, `nvidia-nim-api`.
+- API strategies read `MINIMAX_*` or `NVIDIA_*` variables from `.env` (see `.env.example`).
+- API choices are constrained to locally generated legal moves; invalid, failed or slow
+  replies fall back to the best local ranked move.
+- Card edge openings must sit on connector cells; `validate_piece_catalog` enforces it.
 
 ## Verification
-- Syntax: `python -m py_compile bandido.py`
-- Local benchmark: `python bandido.py --benchmark --games 3 --seed 3`
+- `python -B -m unittest -q test_bandido` (offline, test-first: add a failing test before changing behaviour)

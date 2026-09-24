@@ -119,11 +119,11 @@ def ender_shape(open_port, extra_cells, torch_cell):
 ENDER_CARDS = [
     ("j-torch", ender_shape(4, [(1, 1), (1, 2), (1, 3)], (1, 4))),
     ("l-torch", ender_shape(3, [(1, 2), (1, 3), (1, 4)], (1, 1))),
-    ("x-torch", ender_shape(5, [(1, 1), (0, 2), (2, 2), (1, 3)], (1, 4))),
-    ("t-torch", ender_shape(2, [(1, 4), (0, 3), (2, 3)], (1, 1))),
+    ("x-torch", ender_shape(5, [(0, 1), (2, 1), (1, 2), (1, 3)], (1, 4))),
+    ("t-torch", ender_shape(2, [(0, 4), (2, 4), (1, 3), (1, 2)], (1, 1))),
     ("i-torch", ender_shape(0, [(1, 1), (1, 2)], (1, 4))),
-    ("y-torch-left", ender_shape(5, [(1, 1), (0, 2), (1, 3)], (1, 4))),
-    ("y-torch-right", ender_shape(2, [(1, 4), (0, 3), (1, 2)], (1, 1))),
+    ("y-torch-left", ender_shape(5, [(0, 1), (1, 2), (1, 3)], (1, 4))),
+    ("y-torch-right", ender_shape(2, [(0, 4), (1, 3), (1, 2)], (1, 1))),
 ]
 
 CARD_NAMES = {
@@ -140,8 +140,15 @@ PIECES = {
 def validate_piece_catalog():
     invalid_terminal_paths = []
     invalid_torches = []
+    off_connector = []
+    connectors = set(PORT_COORDS.values())
     for shape_num, shape in PIECES.items():
         shape = np.array(shape, dtype=np.int16)
+        # Tiles sit on a 3-cell lattice, so an edge opening between connectors never meets another tile.
+        if any((row in (0, shape.shape[0] - 1) or column in (0, shape.shape[1] - 1))
+               and (int(row), int(column)) not in connectors
+               for row, column in np.argwhere(shape == PATH)):
+            off_connector.append(shape_num)
         for row, column in np.argwhere(shape == PATH):
             is_edge_cell = row in (0, shape.shape[0] - 1) or column in (0, shape.shape[1] - 1)
             path_neighbors = 0
@@ -162,6 +169,8 @@ def validate_piece_catalog():
             if path_neighbors != 1:
                 invalid_torches.append(shape_num)
                 break
+    if off_connector:
+        raise ValueError(f"Invalid cards with edge openings between connectors: {', '.join(off_connector)}")
     if invalid_terminal_paths:
         raise ValueError(f"Invalid cards with non-torch internal terminal paths: {', '.join(invalid_terminal_paths)}")
     if invalid_torches:
@@ -484,12 +493,18 @@ class Grid:
             "bounds": [int(filled_rows.min()), int(filled_rows.max()), int(filled_columns.min()), int(filled_columns.max())],
         }
 
-    def to_image(self, scale=6):
+    def to_image(self, scale=6, crop=None):
+        """Render the board; crop=N trims to the occupied area plus N cells of margin."""
         from PIL import Image
 
-        image = np.where(self.grid[..., None] >= WALL, (139, 69, 19), (0, 0, 0)).astype(np.uint8)
-        image[self.grid == EMPTY] = (245, 222, 179)
-        image[self.grid == TORCH] = (230, 42, 30)
+        grid = self.grid
+        bounds = self.board_summary()["bounds"]
+        if crop is not None and bounds:
+            top, bottom, left, right = bounds
+            grid = grid[max(0, top - crop):bottom + crop + 1, max(0, left - crop):right + crop + 1]
+        image = np.where(grid[..., None] >= WALL, (139, 69, 19), (0, 0, 0)).astype(np.uint8)
+        image[grid == EMPTY] = (245, 222, 179)
+        image[grid == TORCH] = (230, 42, 30)
         data = Image.fromarray(image, "RGB")
         if scale > 1:
             data = data.resize((data.width * scale, data.height * scale), Image.Resampling.NEAREST)
@@ -804,7 +819,7 @@ def play_one(args):
     elapsed = time.perf_counter() - started
 
     if args.output:
-        image = game.grid.to_image(scale=args.png_scale)
+        image = game.grid.to_image(scale=args.png_scale, crop=None if args.full_board else 3)
         image.save(args.output)
         if args.show:
             image.show()
@@ -866,6 +881,7 @@ def parse_args():
     parser.add_argument("--output", default="bandido.png")
     parser.add_argument("--png-scale", type=int, default=6)
     parser.add_argument("--show", action="store_true")
+    parser.add_argument("--full-board", action="store_true", help="render the whole grid instead of cropping to the tunnels")
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--validate", action="store_true", help="run piece-catalog validation and exit")
     return parser.parse_args()

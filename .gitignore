@@ -24,3 +24,5 @@ build/
 *.pdb
 *.tmp
 *.lock
+bandido.png
+*_hires.png

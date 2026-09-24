@@ -35,6 +35,21 @@ class CatalogTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "torch"):
                 b.validate_piece_catalog()
 
+    def test_edge_paths_only_at_connectors(self):
+        ports = set(b.PORT_COORDS.values())
+        for key, shape in b.PIECES.items():
+            shape = np.array(shape)
+            for row, column in np.argwhere(shape == b.PATH):
+                if row in (0, 2) or column in (0, 5):
+                    self.assertIn((int(row), int(column)), ports, b.CARD_NAMES[key])
+
+    def test_off_connector_edge_detected(self):
+        bad = np.array(b.piece_from_ports((5, 2)))
+        bad[0, 2] = b.PATH  # opening between connectors can never be matched
+        with mock.patch.dict(b.PIECES, {"bad": bad.tolist()}):
+            with self.assertRaisesRegex(ValueError, "connector"):
+                b.validate_piece_catalog()
+
     def test_piece_from_ports_opens_requested_edges(self):
         shape = np.array(b.piece_from_ports((0, 2)))
         self.assertEqual(shape[0, 1], b.PATH)
@@ -134,6 +149,14 @@ class GridTests(unittest.TestCase):
         image = self.grid.to_image(scale=2)
         self.assertEqual(image.size, (120, 120))
 
+    def test_image_crop_to_board_with_margin(self):
+        rows, cols = np.where(self.grid.grid != b.EMPTY)
+        height = int(rows.max() - rows.min()) + 1 + 2 * 3
+        width = int(cols.max() - cols.min()) + 1 + 2 * 3
+        image = self.grid.to_image(scale=2, crop=3)
+        self.assertEqual(image.size, (width * 2, height * 2))
+        self.assertEqual(b.Grid(12).to_image(scale=1, crop=3).size, (12, 12))
+
 
 class StrategyTests(unittest.TestCase):
     def moves(self):
@@ -182,6 +205,21 @@ class StrategyTests(unittest.TestCase):
 
 
 class GameTests(unittest.TestCase):
+    def test_cli_image_is_cropped_unless_full_board(self):
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as tmp:
+            sizes = {}
+            for full in (False, True):
+                path = os.path.join(tmp, f"{full}.png")
+                args = SimpleNamespace(players=2, strategy="compact", api_options=12, pieces=10,
+                                       grid_size=60, hand_size=3, seed=3, verbose=False, turn_limit=5,
+                                       output=path, png_scale=1, show=False, full_board=full)
+                b.play_one(args)
+                with Image.open(path) as image:
+                    sizes[full] = image.size
+        self.assertEqual(sizes[True], (60, 60))
+        self.assertLess(sizes[False][0] * sizes[False][1], 60 * 60)
+
     def test_seeded_game_is_reproducible_and_consistent(self):
         def play():
             game = b.Game(b.make_players(2, "compact"), pieces_amount=20, grid_size=60, seed=5)
