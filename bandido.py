@@ -280,7 +280,7 @@ class Grid:
             for next_row, next_column in ((row - 1, column), (row, column - 1), (row + 1, column), (row, column + 1)):
                 if 0 <= next_row < self.wh and 0 <= next_column < self.wh:
                     if self.grid[next_row, next_column] == EMPTY:
-                        self.open_positions.add((next_row, next_column))
+                        self.open_positions.add((int(next_row), int(next_column)))
 
     def is_won(self):
         return not self.open_positions
@@ -655,6 +655,8 @@ class OpenAICompatibleApiStrategy:
         try:
             choice = json.loads(content)
             move_id = int(choice["id"])
+            if move_id < 0:
+                raise IndexError(move_id)
             return ranked[move_id]
         except (ValueError, KeyError, TypeError, IndexError, json.JSONDecodeError):
             return ranked[0]
