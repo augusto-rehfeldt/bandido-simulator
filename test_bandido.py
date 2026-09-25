@@ -174,34 +174,49 @@ class StrategyTests(unittest.TestCase):
 
     def test_build_strategy(self):
         self.assertIsInstance(b.build_strategy("greedy"), b.GreedyStrategy)
-        self.assertEqual(b.build_strategy("minimax-api", api_options=5).max_options, 5)
+        with mock.patch.object(b, "shared_ai_service", return_value="svc"):
+            strategy = b.build_strategy("ai", api_options=5)
+        self.assertEqual((strategy.service, strategy.max_options), ("svc", 5))
         with self.assertRaises(ValueError):
             b.build_strategy("nope")
 
-    def test_api_strategy_parses_choice_and_falls_back(self):
+    def test_only_local_and_shared_suite_strategies(self):
+        self.assertEqual(set(b.STRATEGIES), {"random", "greedy", "compact", "ai"})
+        self.assertFalse(hasattr(b, "OpenAICompatibleApiStrategy"))
+
+    def test_ai_strategy_parses_choice_and_falls_back(self):
         grid, moves = self.moves()
         ranked = sorted(moves, key=lambda m: m.rank, reverse=True)
-        strategy = b.build_strategy("nvidia-nim-api", api_options=4)
-
-        def reply(content):
-            message = SimpleNamespace(content=content)
-            create = mock.Mock(return_value=SimpleNamespace(choices=[SimpleNamespace(message=message)]))
-            strategy.client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
-            return create
-
-        create = reply('{"id": 1}')
-        self.assertIs(strategy.choose(grid, [], moves, 0), ranked[1])
-        self.assertIn("extra_body", create.call_args.kwargs)
-        for bad in ("not json", '{"id": 99}', '{"id": -1}', '{"x": 1}'):
-            reply(bad)
-            self.assertIs(strategy.choose(grid, [], moves, 0), ranked[0])
-        strategy.client.chat.completions.create.side_effect = RuntimeError("down")
+        service = mock.Mock()
+        strategy = b.AIStrategy(service, max_options=4)
+        for reply, expected in (('{"id": 1}', 1), ('Sure! ```json\n{"id": 2}\n```', 2),
+                                ("not json", 0), ('{"id": 99}', 0), ('{"id": -1}', 0), ('{"x": 1}', 0)):
+            service.generate_content.return_value = reply
+            self.assertIs(strategy.choose(grid, [], moves, 0), ranked[expected], reply)
+        prompt = service.generate_content.call_args.args[0]
+        self.assertEqual(len(b.json.loads(prompt)["legal_options"]), 4)
+        # A turn fails fast: a rate limit or slow provider falls back instead of stalling the game.
+        self.assertEqual(service.generate_content.call_args.kwargs,
+                         {"model_type": "writing", "max_retries": 1, "wait_for_limits": False})
+        service.generate_content.side_effect = RuntimeError("down")
         self.assertIs(strategy.choose(grid, [], moves, 0), ranked[0])
 
-    def test_api_strategy_requires_key(self):
-        strategy = b.build_strategy("minimax-api")
-        with mock.patch.dict(os.environ, {}, clear=True), self.assertRaisesRegex(RuntimeError, "API_KEY"):
-            strategy.get_client()
+    def test_shared_service_uses_book_writer_menu_once(self):
+        choose_ai = mock.Mock(return_value=("nvidia", "cfg.json", ["m"]))
+        ai_service = mock.Mock()
+        modules = {"ai_book_creator": mock.Mock(), "ai_book_creator.cli": mock.Mock(choose_ai=choose_ai),
+                   "ai_book_creator.services": mock.Mock(),
+                   "ai_book_creator.services.ai_service": mock.Mock(AIService=ai_service)}
+        with mock.patch.dict(b.sys.modules, modules), mock.patch.object(b.sys, "path", list(b.sys.path)), \
+             mock.patch.object(b, "_shared_service", None):
+            first, second = b.shared_ai_service(), b.shared_ai_service()
+            self.assertIn(str(b.BOOK_WRITER), b.sys.path)
+        self.assertIs(first, second)
+        choose_ai.assert_called_once()
+        self.assertEqual(choose_ai.call_args.kwargs["state_file"], b.HERE / "provider_state.json")
+        self.assertEqual(ai_service.call_args.kwargs["config_path"], "cfg.json")
+        self.assertEqual(ai_service.call_args.kwargs["config_overrides"], {"timeout": b.AI_TIMEOUT_SECONDS})
+        self.assertLessEqual(b.AI_TIMEOUT_SECONDS, 60)
 
 
 class GameTests(unittest.TestCase):
@@ -240,19 +255,6 @@ class GameTests(unittest.TestCase):
         self.assertEqual(before, after)
         self.assertEqual(len(player.hand), 3)
         self.assertEqual(b.Player(b.RandomStrategy()).exchange_hand([], 3), [])
-
-
-class EnvTests(unittest.TestCase):
-    def test_load_env_does_not_override_existing(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, ".env")
-            with open(path, "w", encoding="utf-8") as f:
-                f.write("# comment\nBANDIDO_A='one'\nBANDIDO_B=two\nnoequals\n")
-            with mock.patch.dict(os.environ, {"BANDIDO_B": "kept"}):
-                b.load_env(path)
-                self.assertEqual(os.environ["BANDIDO_A"], "one")
-                self.assertEqual(os.environ["BANDIDO_B"], "kept")
-        b.load_env(os.path.join("missing", ".env"))
 
 
 if __name__ == "__main__":

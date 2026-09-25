@@ -2,10 +2,18 @@ import argparse
 import json
 import os
 import random
+import re
+import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
+
+HERE = Path(__file__).resolve().parent
+# The "ai" strategy uses book writer's shared AI suite (provider/model menu,
+# credentials, retries), like every other AI script in the workspace.
+BOOK_WRITER = Path(os.getenv("BANDIDO_BOOK_WRITER") or HERE.parent / "book writer")
 
 
 EMPTY = -1
@@ -196,21 +204,6 @@ def adjacent_values(matrix, row, column):
         else:
             values.append(EMPTY)
     return values
-
-
-# ponytail: no python-dotenv dep in requirements; local parser stays.
-def load_env(path=".env"):
-    if not os.path.exists(path):
-        return
-    with open(path, "r", encoding="utf-8") as handle:
-        for raw_line in handle:
-            line = raw_line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            key = key.strip()
-            value = value.strip().strip('"').strip("'")
-            os.environ.setdefault(key, value)
 
 
 def random_wall_code(used_codes):
@@ -597,35 +590,37 @@ class CompactStrategy:
         return random.choice(best_moves)
 
 
-# ponytail: collapsed MinimaxApiStrategy + NvidiaNimApiStrategy; they differed only in env prefix + defaults.
-class OpenAICompatibleApiStrategy:
-    def __init__(self, name, prefix, default_base_url, default_model, default_timeout, max_options=12, extra_body_enabled=False):
-        self.name = name
-        self.prefix = prefix
-        self.default_base_url = default_base_url
-        self.default_model = default_model
-        self.default_timeout = default_timeout
-        self.max_options = max_options
-        self.extra_body_enabled = extra_body_enabled
-        self.client = None
+_shared_service = None
+AI_TIMEOUT_SECONDS = 30  # one move choice; past this the best local move is played
 
-    def get_client(self):
-        if self.client is not None:
-            return self.client
-        try:
-            from openai import OpenAI
-        except ImportError as exc:
-            raise RuntimeError(f"Install the OpenAI SDK with `pip install openai` to use --strategy {self.name}") from exc
-        api_key = os.getenv(self.prefix + "API_KEY")
-        if not api_key:
-            raise RuntimeError(f"Set {self.prefix}API_KEY in .env or your environment to use --strategy {self.name}")
-        self.client = OpenAI(
-            base_url=os.getenv(self.prefix + "BASE_URL", self.default_base_url),
-            api_key=api_key,
-            timeout=float(os.getenv(self.prefix + "TIMEOUT", str(self.default_timeout))),
-            max_retries=0,
-        )
-        return self.client
+
+def shared_ai_service():
+    """Book writer's AIService, after its provider/model menu (picks remembered per script).
+
+    Built once, so every AI player in a game or benchmark shares one connection.
+    """
+    global _shared_service
+    if _shared_service is None:
+        sys.path.insert(0, str(BOOK_WRITER))
+        from ai_book_creator.cli import choose_ai
+        from ai_book_creator.services.ai_service import AIService
+
+        interactive = sys.stdin.isatty()
+        _, config, _ = choose_ai(None, "review" if interactive else "auto",
+                                 state_file=HERE / "provider_state.json")
+        _shared_service = AIService(config_path=config, allow_auth_prompt=interactive,
+                                    config_overrides={"timeout": AI_TIMEOUT_SECONDS})
+    return _shared_service
+
+
+class AIStrategy:
+    """Offers the best locally ranked legal moves to the shared AI suite and plays its pick."""
+
+    name = "ai"
+
+    def __init__(self, service, max_options=12):
+        self.service = service
+        self.max_options = max_options
 
     def choose(self, grid, hand, moves, player_index):
         ranked = sorted(moves, key=lambda move: move.rank, reverse=True)[: self.max_options]
@@ -642,57 +637,24 @@ class OpenAICompatibleApiStrategy:
             "legal_options": options,
             "required_response": "Return only JSON like {\"id\": 0}.",
         }
-        client = self.get_client()
-        create_kwargs = {
-            "model": os.getenv(self.prefix + "MODEL", self.default_model),
-            "messages": [{"role": "user", "content": json.dumps(prompt)}],
-        }
-        temperature = os.getenv(self.prefix + "TEMPERATURE")
-        if temperature is not None:
-            create_kwargs["temperature"] = float(temperature)
-        top_p = os.getenv(self.prefix + "TOP_P")
-        if top_p is not None:
-            create_kwargs["top_p"] = float(top_p)
-        max_tokens = os.getenv(self.prefix + "MAX_TOKENS")
-        if max_tokens is not None:
-            create_kwargs["max_tokens"] = int(max_tokens)
-        if self.extra_body_enabled:
-            create_kwargs["extra_body"] = {
-                "chat_template_kwargs": {
-                    "thinking": os.getenv(self.prefix + "THINKING", "false").lower() == "true",
-                }
-            }
+        # Any failure (provider error, prose, bad id) plays the best local move instead.
         try:
-            response = client.chat.completions.create(**create_kwargs)
-            content = response.choices[0].message.content
-        except Exception:
-            return ranked[0]
-        try:
-            choice = json.loads(content)
-            move_id = int(choice["id"])
+            reply = self.service.generate_content(json.dumps(prompt), model_type="writing",
+                                                  max_retries=1, wait_for_limits=False)
+            match = re.search(r"\{[^{}]*\}", reply or "")
+            move_id = int(json.loads(match.group(0))["id"])
             if move_id < 0:
                 raise IndexError(move_id)
             return ranked[move_id]
-        except (ValueError, KeyError, TypeError, IndexError, json.JSONDecodeError):
+        except Exception:
             return ranked[0]
 
 
-# ponytail: dict replaces build_strategy if-chain; strategies selected by name.
 STRATEGIES = {
     "random": lambda _api_options: RandomStrategy(),
     "greedy": lambda _api_options: GreedyStrategy(),
     "compact": lambda _api_options: CompactStrategy(),
-    "minimax-api": lambda api_options: OpenAICompatibleApiStrategy(
-        name="minimax-api", prefix="MINIMAX_",
-        default_base_url="https://api.minimax.io/v1",
-        default_model="MiniMax-M2.7", default_timeout=10, max_options=api_options,
-    ),
-    "nvidia-nim-api": lambda api_options: OpenAICompatibleApiStrategy(
-        name="nvidia-nim-api", prefix="NVIDIA_",
-        default_base_url="https://integrate.api.nvidia.com/v1",
-        default_model="deepseek-ai/deepseek-v4-pro", default_timeout=30,
-        max_options=api_options, extra_body_enabled=True,
-    ),
+    "ai": lambda api_options: AIStrategy(shared_ai_service(), max_options=api_options),
 }
 
 
@@ -866,7 +828,7 @@ def parse_args():
     parser.add_argument("--seed", type=int)
     parser.add_argument(
         "--strategy",
-        choices=["random", "greedy", "compact", "minimax-api", "nvidia-nim-api"],
+        choices=list(STRATEGIES),
         default="compact",
     )
     parser.add_argument("--games", type=int, default=50)
@@ -876,7 +838,7 @@ def parse_args():
     parser.add_argument(
         "--benchmark-strategies",
         nargs="+",
-        choices=["random", "greedy", "compact", "minimax-api", "nvidia-nim-api"],
+        choices=list(STRATEGIES),
     )
     parser.add_argument("--output", default="bandido.png")
     parser.add_argument("--png-scale", type=int, default=6)
@@ -888,7 +850,6 @@ def parse_args():
 
 
 def main():
-    load_env()
     args = parse_args()
     if args.validate:
         validate_piece_catalog()

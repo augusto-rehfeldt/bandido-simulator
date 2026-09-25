@@ -26,3 +26,4 @@ build/
 *.lock
 bandido.png
 *_hires.png
+provider_state.json

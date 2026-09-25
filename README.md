@@ -2,7 +2,7 @@
 
 A simulation of the cooperative tile game *Bandido*: players lay 3x6 tunnel cards
 around a start card and try to close every open exit before the deck runs out.
-Local strategies (random, greedy, compact) and optional LLM players choose
+Local strategies (random, greedy, compact) and an optional AI player choose
 among the legal moves the simulator generates.
 
 ![A won game: every tunnel ends in a torch (red) or joins another tunnel](docs/won-game.png)
@@ -25,12 +25,16 @@ Images are cropped to the tunnels; `--full-board` renders the whole grid and
 | greedy | 1/30 | 19.8 |
 | compact | 8/30 | 9.5 |
 
-## LLM players
+## AI players
 
-`--strategy minimax-api` or `--strategy nvidia-nim-api` sends the ranked legal
-moves to an OpenAI-compatible endpoint. Copy `.env.example` to `.env` and set
-`MINIMAX_API_KEY` or `NVIDIA_API_KEY` (plus optional `*_MODEL`, `*_BASE_URL`,
-`*_TIMEOUT`). An invalid, failed or slow reply falls back to the best-ranked move.
+`--strategy ai` offers the best-ranked legal moves to a language model through
+[book writer](https://github.com/augusto-rehfeldt/book-writer)'s shared AI suite,
+like every AI script in this workspace: clone it next to this folder (or set
+`BANDIDO_BOOK_WRITER`). The first run asks for provider and model (MiniMax, NVIDIA NIM,
+Claude, OpenRouter and the rest) and remembers the pick; keys are configured there (move any
+`MINIMAX_API_KEY`/`NVIDIA_API_KEY` from an old `bandido/.env` into book writer's `.env`).
+A turn waits at most 30 seconds and never waits out a provider limit.
+An invalid or failed reply falls back to the best-ranked move.
 
 ## Tests
 
@@ -38,7 +42,7 @@ moves to an OpenAI-compatible endpoint. Copy `.env.example` to `.env` and set
 python -B -m unittest -q test_bandido
 ```
 
-Offline: API calls are stubbed. The suite validates the catalogue (edge openings
+Offline: the shared suite is stubbed. The suite validates the catalogue (edge openings
 only at connectors, torches as dead ends), placement, move projection,
 strategies, seeded games and PNG rendering.
 
