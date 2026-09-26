@@ -11,9 +11,9 @@ from pathlib import Path
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
-# The "ai" strategy uses book writer's shared AI suite (provider/model menu,
+# The "ai" strategy uses the shared ai-suite package (provider/model menu,
 # credentials, retries), like every other AI script in the workspace.
-BOOK_WRITER = Path(os.getenv("BANDIDO_BOOK_WRITER") or HERE.parent / "book writer")
+AI_SUITE = Path(os.getenv("AI_SUITE_DIR") or HERE.parent / "ai-suite")
 
 
 EMPTY = -1
@@ -595,15 +595,15 @@ AI_TIMEOUT_SECONDS = 30  # one move choice; past this the best local move is pla
 
 
 def shared_ai_service():
-    """Book writer's AIService, after its provider/model menu (picks remembered per script).
+    """The shared AIService, after its provider/model menu (picks remembered per script).
 
     Built once, so every AI player in a game or benchmark shares one connection.
     """
     global _shared_service
     if _shared_service is None:
-        sys.path.insert(0, str(BOOK_WRITER))
-        from ai_book_creator.cli import choose_ai
-        from ai_book_creator.services.ai_service import AIService
+        if AI_SUITE.is_dir():
+            sys.path.insert(0, str(AI_SUITE))
+        from ai_suite import AIService, choose_ai
 
         interactive = sys.stdin.isatty()
         _, config, _ = choose_ai(None, "review" if interactive else "auto",

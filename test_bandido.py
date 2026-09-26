@@ -201,16 +201,14 @@ class StrategyTests(unittest.TestCase):
         service.generate_content.side_effect = RuntimeError("down")
         self.assertIs(strategy.choose(grid, [], moves, 0), ranked[0])
 
-    def test_shared_service_uses_book_writer_menu_once(self):
+    def test_shared_service_uses_the_suite_menu_once(self):
         choose_ai = mock.Mock(return_value=("nvidia", "cfg.json", ["m"]))
         ai_service = mock.Mock()
-        modules = {"ai_book_creator": mock.Mock(), "ai_book_creator.cli": mock.Mock(choose_ai=choose_ai),
-                   "ai_book_creator.services": mock.Mock(),
-                   "ai_book_creator.services.ai_service": mock.Mock(AIService=ai_service)}
+        modules = {"ai_suite": mock.Mock(choose_ai=choose_ai, AIService=ai_service)}
         with mock.patch.dict(b.sys.modules, modules), mock.patch.object(b.sys, "path", list(b.sys.path)), \
              mock.patch.object(b, "_shared_service", None):
             first, second = b.shared_ai_service(), b.shared_ai_service()
-            self.assertIn(str(b.BOOK_WRITER), b.sys.path)
+            self.assertEqual(str(b.AI_SUITE) in b.sys.path, b.AI_SUITE.is_dir())
         self.assertIs(first, second)
         choose_ai.assert_called_once()
         self.assertEqual(choose_ai.call_args.kwargs["state_file"], b.HERE / "provider_state.json")

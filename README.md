@@ -28,11 +28,11 @@ Images are cropped to the tunnels; `--full-board` renders the whole grid and
 ## AI players
 
 `--strategy ai` offers the best-ranked legal moves to a language model through
-[book writer](https://github.com/augusto-rehfeldt/book-writer)'s shared AI suite,
+the shared [ai-suite](https://github.com/augusto-rehfeldt/ai-suite) package,
 like every AI script in this workspace: clone it next to this folder (or set
-`BANDIDO_BOOK_WRITER`). The first run asks for provider and model (MiniMax, NVIDIA NIM,
+`AI_SUITE_DIR`). The first run asks for provider and model (MiniMax, NVIDIA NIM,
 Claude, OpenRouter and the rest) and remembers the pick; keys are configured there (move any
-`MINIMAX_API_KEY`/`NVIDIA_API_KEY` from an old `bandido/.env` into book writer's `.env`).
+`MINIMAX_API_KEY`/`NVIDIA_API_KEY` from an old `bandido/.env` into ai-suite's `.env`).
 A turn waits at most 30 seconds and never waits out a provider limit.
 An invalid or failed reply falls back to the best-ranked move.
 
